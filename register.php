@@ -1,5 +1,4 @@
 <?php
-
 header("Content-Type: application/json");
 require_once "db.php";
 
@@ -18,23 +17,36 @@ if (empty($username) || empty($password) || empty($email)) {
     exit;
 }
 
+// SECURE: Hash the password
+$hashedPassword = password_hash($password, PASSWORD_DEFAULT);
+
 $sql = "INSERT INTO users (username, password, email, first_name, last_name, birthday)
         VALUES (?, ?, ?, ?, ?, ?)";
 
 $stmt = $conn->prepare($sql);
-$stmt->bind_param("ssssss", $username, $password, $email, $firstName, $lastName, $birthday);
+$stmt->bind_param("ssssss", $username, $hashedPassword, $email, $firstName, $lastName, $birthday);
 
-if ($stmt->execute()) {
+try {
+    $stmt->execute();
     echo json_encode([
         "status" => "success",
         "message" => "User registered successfully."
     ]);
-} else {
-    echo json_encode([
-        "status" => "error",
-        "message" => $stmt->error
-    ]);
+} catch (mysqli_sql_exception $e) {
+    // 1062 is the specific MySQL code for a Duplicate Entry
+    if ($e->getCode() == 1062) {
+        echo json_encode([
+            "status" => "error",
+            "message" => "Username is already taken. Please choose another."
+        ]);
+    } else {
+        echo json_encode([
+            "status" => "error",
+            "message" => "Database error occurred."
+        ]);
+    }
 }
 
 $stmt->close();
 $conn->close();
+?>
