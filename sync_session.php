@@ -5,6 +5,7 @@ ini_set('display_errors', 0);
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST");
+<<<<<<< HEAD
 header("Access-Control-Max-Age: 3600");
 header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 
@@ -20,6 +21,14 @@ if (empty($data) || !isset($data['session_id'])) {
     exit();
 }
 
+=======
+
+require_once "db.php";
+
+$rawData = file_get_contents("php://input");
+$data = json_decode($rawData, true);
+
+>>>>>>> 02ac3df66b464cd1415cdb5e9a6e023ecf1e77b3
 // 1. THE BOUNCER: Check for the token
 if (empty($data["auth_token"]) || empty($data["user_id"])) {
     echo json_encode(["status" => "error", "message" => "Unauthorized access. Missing token."]);
@@ -29,6 +38,7 @@ if (empty($data["auth_token"]) || empty($data["user_id"])) {
 $authToken = $data["auth_token"];
 $userId = $data["user_id"];
 
+<<<<<<< HEAD
 try {
     // 2. VERIFY TOKEN AGAINST DATABASE (Using PDO from db.php)
     $verifySql = "SELECT id FROM users WHERE id = :user_id AND auth_token = :auth_token";
@@ -102,4 +112,56 @@ try {
     }
     echo json_encode(["status" => "error", "message" => "Transaction Failed: " . $e->getMessage()]);
 }
+=======
+// 2. VERIFY TOKEN AGAINST DATABASE
+$verifySql = "SELECT id FROM users WHERE id = ? AND auth_token = ?";
+$verifyStmt = $conn->prepare($verifySql);
+$verifyStmt->bind_param("is", $userId, $authToken);
+$verifyStmt->execute();
+$verifyResult = $verifyStmt->get_result();
+
+if ($verifyResult->num_rows === 0) {
+    echo json_encode(["status" => "error", "message" => "Unauthorized access. Invalid or expired token."]);
+    exit;
+}
+$verifyStmt->close();
+
+// 3. IF TOKEN IS VALID, PROCEED WITH SAVING THE WORKOUT
+$sessionId = $data["session_id"];
+$routineId = $data["routine_id"] ?? null;
+$status = $data["status"];
+$globalScore = $data["global_score"];
+$durationSeconds = $data["duration_seconds"];
+
+// Insert Session
+$sessionSql = "INSERT INTO workout_sessions (id, user_id, routine_id, status, global_score, duration_seconds) VALUES (?, ?, ?, ?, ?, ?)";
+$sessionStmt = $conn->prepare($sessionSql);
+$sessionStmt->bind_param("sissii", $sessionId, $userId, $routineId, $status, $globalScore, $durationSeconds);
+
+try {
+    $sessionStmt->execute();
+    $sessionStmt->close();
+
+    // Insert Exercises (Child Rows)
+    if (!empty($data["exercises"])) {
+        $exSql = "INSERT INTO exercise_telemetry (id, session_id, exercise_name, good_reps, bad_reps, exercise_score, rep_scores_array) VALUES (?, ?, ?, ?, ?, ?, ?)";
+        $exStmt = $conn->prepare($exSql);
+
+        foreach ($data["exercises"] as $ex) {
+            // Re-encode the array to a string for MySQL
+            $repScoresStr = json_encode($ex["rep_scores"]);
+            $exStmt->bind_param("sssiiis", $ex["telemetry_id"], $sessionId, $ex["exercise_name"], $ex["good_reps"], $ex["bad_reps"], $ex["exercise_score"], $repScoresStr);
+            $exStmt->execute();
+        }
+        $exStmt->close();
+    }
+
+    echo json_encode(["status" => "success", "message" => "Session synced securely."]);
+
+} catch (Exception $e) {
+    echo json_encode(["status" => "error", "message" => "Failed to save session."]);
+}
+
+$conn->close();
+>>>>>>> 02ac3df66b464cd1415cdb5e9a6e023ecf1e77b3
 ?>
