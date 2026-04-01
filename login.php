@@ -6,7 +6,7 @@ header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST");
 
-require_once "db.php";
+require_once "db.php"; 
 
 $rawData = file_get_contents("php://input");
 $data = json_decode($rawData, true);
@@ -19,51 +19,36 @@ if (empty($username) || empty($password)) {
     exit;
 }
 
-$sql = "SELECT id, username, password, email, first_name, last_name, birthday, created_at
-        FROM users
-        WHERE BINARY username = ?";
+try {
+    // Note: Column is 'password', matching your schema exactly
+    $stmt = $conn->prepare("SELECT id, username, password FROM users WHERE username = :username LIMIT 1");
+    $stmt->execute([':username' => $username]);
+    $user = $stmt->fetch();
 
-$stmt = $conn->prepare($sql);
+    if ($user && password_verify($password, $user['password'])) {
+        $token = bin2hex(random_bytes(32));
 
-if (!$stmt) {
-    echo json_encode(["status" => "error", "message" => "Database preparation failed."]);
-    exit;
-}
+        $updateStmt = $conn->prepare("UPDATE users SET auth_token = :token WHERE id = :id");
+        $updateStmt->execute([
+            ':token' => $token,
+            ':id' => $user['id']
+        ]);
 
-$stmt->bind_param("s", $username);
-$stmt->execute();
-$result = $stmt->get_result();
-
-if ($result->num_rows > 0) {
-    $user = $result->fetch_assoc();
-
-    if (password_verify($password, $user['password'])) {
-        unset($user['password']); // Hide password hash
-
-        // --- NEW: GENERATE AND SAVE AUTH TOKEN ---
-        $token = bin2hex(random_bytes(32)); // Creates a secure 64-character string
-        
-        $updateTokenSql = "UPDATE users SET auth_token = ? WHERE id = ?";
-        $tokenStmt = $conn->prepare($updateTokenSql);
-        $tokenStmt->bind_param("si", $token, $user['id']);
-        $tokenStmt->execute();
-        $tokenStmt->close();
-
-        $user['auth_token'] = $token; // Send token back to Flutter
-        // -----------------------------------------
-
+        // Payload perfectly matches what Flutter's _saveLogin expects
         echo json_encode([
             "status" => "success",
             "message" => "Login successful.",
-            "user" => $user
+            "user" => [
+                "id" => (int)$user['id'],
+                "username" => $user['username'],
+                "auth_token" => $token
+            ]
         ]);
     } else {
         echo json_encode(["status" => "error", "message" => "Invalid username or password."]);
     }
-} else {
-    echo json_encode(["status" => "error", "message" => "Invalid username or password."]);
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(["status" => "error", "message" => "Database error."]);
 }
-
-$stmt->close();
-$conn->close();
 ?>
