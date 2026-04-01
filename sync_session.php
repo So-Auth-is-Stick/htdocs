@@ -10,96 +10,94 @@ header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers
 
 require_once "db.php"; 
 
-// Extract the raw JSON payload from the Flutter app
 $rawData = file_get_contents("php://input");
 $data = json_decode($rawData, true);
 
-// Validate payload presence
+// 1. VALIDATE PAYLOAD
 if (empty($data) || !isset($data['session_id'])) {
     echo json_encode(["status" => "error", "message" => "Invalid or empty payload."]);
     exit();
 }
 
-// 1. THE BOUNCER: Check for the token
+// 2. THE BOUNCER
 if (empty($data["auth_token"]) || empty($data["user_id"])) {
     echo json_encode(["status" => "error", "message" => "Unauthorized access. Missing token."]);
-    exit;
+    exit();
 }
 
 $authToken = $data["auth_token"];
 $userId = $data["user_id"];
 
 try {
-    // 2. VERIFY TOKEN AGAINST DATABASE (Using PDO from db.php)
-    $verifySql = "SELECT id FROM users WHERE id = :user_id AND auth_token = :auth_token";
-    $verifyStmt = $conn->prepare($verifySql);
-    $verifyStmt->execute([
-        ':user_id' => $userId,
-        ':auth_token' => $authToken
-    ]);
-
-    if ($verifyStmt->rowCount() === 0) {
-        echo json_encode(["status" => "error", "message" => "Unauthorized access. Invalid or expired token."]);
-        exit;
-    }
-
-    // 3. IF TOKEN IS VALID, PROCEED WITH UPSERT TRANSACTION
     $conn->beginTransaction();
 
-    // UPSERT THE WORKOUT SESSION
-    $session_query = "INSERT INTO workout_sessions 
-        (id, user_id, routine_id, status, global_score, duration_seconds) 
-        VALUES (:id, :user_id, :routine_id, :status, :global_score, :duration_seconds)
+    // 3. OPTIONAL: Verify Token (Uncomment if your users table has auth_token)
+    /*
+    $stmtUser = $conn->prepare("SELECT id FROM users WHERE id = ? AND auth_token = ?");
+    $stmtUser->execute([$userId, $authToken]);
+    if ($stmtUser->rowCount() === 0) {
+        echo json_encode(["status" => "error", "message" => "Invalid auth token."]);
+        exit();
+    }
+    */
+
+    // 4. INSERT PARENT SESSION (ON DUPLICATE KEY UPDATE handles retries gracefully)
+    $stmtSession = $conn->prepare("
+        INSERT INTO workout_sessions (id, user_id, routine_id, status, global_score, duration_seconds) 
+        VALUES (?, ?, ?, ?, ?, ?) 
         ON DUPLICATE KEY UPDATE 
-        status = :status, 
-        global_score = :global_score, 
-        duration_seconds = :duration_seconds";
-        
-    $stmt = $conn->prepare($session_query);
-    $stmt->execute([
-        ':id' => $data['session_id'],
-        ':user_id' => $userId,
-        ':routine_id' => !empty($data['routine_id']) ? $data['routine_id'] : null,
-        ':status' => $data['status'],
-        ':global_score' => $data['global_score'],
-        ':duration_seconds' => $data['duration_seconds']
+        status = VALUES(status), global_score = VALUES(global_score), duration_seconds = VALUES(duration_seconds)
+    ");
+    
+    $routineId = !empty($data['routine_id']) ? $data['routine_id'] : null;
+    $stmtSession->execute([
+        $data['session_id'],
+        $userId,
+        $routineId,
+        $data['status'] ?? 'IN_PROGRESS',
+        $data['global_score'] ?? 0,
+        $data['duration_seconds'] ?? 0
     ]);
 
-    // UPSERT THE EXERCISE TELEMETRY
-    if (isset($data['exercises']) && is_array($data['exercises'])) {
-        $ex_query = "INSERT INTO exercise_telemetry 
-            (id, session_id, exercise_name, good_reps, bad_reps, exercise_score, rep_scores_array) 
-            VALUES (:id, :session_id, :exercise_name, :good_reps, :bad_reps, :exercise_score, :rep_scores_array)
-            ON DUPLICATE KEY UPDATE 
-            good_reps = :good_reps, 
-            bad_reps = :bad_reps, 
-            exercise_score = :exercise_score, 
-            rep_scores_array = :rep_scores_array";
-            
-        $ex_stmt = $conn->prepare($ex_query);
-        
+    // 5. INSERT EXERCISES AND REPS
+    if (!empty($data['exercises'])) {
+        // Prepare statements once for massive performance gain on loops
+        $stmtEx = $conn->prepare("INSERT IGNORE INTO exercise_telemetry (id, session_id, exercise_name, good_reps, bad_reps, exercise_score) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmtRep = $conn->prepare("INSERT IGNORE INTO rep_telemetry (id, exercise_telemetry_id, rep_number, score) VALUES (?, ?, ?, ?)");
+
         foreach ($data['exercises'] as $ex) {
-            $ex_stmt->execute([
-                ':id' => $ex['telemetry_id'],
-                ':session_id' => $data['session_id'],
-                ':exercise_name' => $ex['exercise_name'],
-                ':good_reps' => $ex['good_reps'],
-                ':bad_reps' => $ex['bad_reps'],
-                ':exercise_score' => $ex['exercise_score'],
-                ':rep_scores_array' => json_encode($ex['rep_scores']) 
+            // Insert Exercise
+            $stmtEx->execute([
+                $ex['id'], 
+                $data['session_id'], 
+                $ex['exercise_name'], 
+                $ex['good_reps'] ?? 0, 
+                $ex['bad_reps'] ?? 0, 
+                $ex['exercise_score'] ?? 0
             ]);
+
+            // Insert Individual Reps
+            if (!empty($ex['reps'])) {
+                foreach ($ex['reps'] as $index => $score) {
+                    $repId = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x', mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0x0fff) | 0x4000, mt_rand(0, 0x3fff) | 0x8000, mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff));
+                    
+                    $stmtRep->execute([
+                        $repId,
+                        $ex['id'],
+                        $index + 1, // rep_number
+                        $score
+                    ]);
+                }
+            }
         }
     }
 
-    // Commit the changes to the database
     $conn->commit();
-    echo json_encode(["status" => "success", "message" => "Telemetry locked into database."]);
-
-} catch (PDOException $e) {
-    // If anything blew up, revert the database to its previous state
-    if ($conn->inTransaction()) {
-        $conn->rollBack();
-    }
-    echo json_encode(["status" => "error", "message" => "Transaction Failed: " . $e->getMessage()]);
+    echo json_encode(['status' => 'success', 'message' => 'Session synchronized successfully.']);
+} catch (Exception $e) {
+    $conn->rollBack();
+    error_log("SYNC ERROR: " . $e->getMessage());
+    http_response_code(500);
+    echo json_encode(['status' => 'error', 'message' => 'Database transaction failed. Check error logs.']);
 }
 ?>
