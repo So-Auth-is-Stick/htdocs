@@ -1,43 +1,54 @@
 <?php
+error_reporting(E_ALL);
+ini_set('display_errors', 0);
 
-header("Content-Type: application/json");
-require_once "db.php";
+header("Access-Control-Allow-Origin: *");
+header("Content-Type: application/json; charset=UTF-8");
+header("Access-Control-Allow-Methods: POST");
 
-$username = $_POST["username"] ?? "";
-$password = $_POST["password"] ?? "";
+require_once "db.php"; 
+
+$rawData = file_get_contents("php://input");
+$data = json_decode($rawData, true);
+
+$username = $data["username"] ?? $_POST["username"] ?? "";
+$password = $data["password"] ?? $_POST["password"] ?? "";
 
 if (empty($username) || empty($password)) {
-    echo json_encode([
-        "status" => "error",
-        "message" => "Username and password are required."
-    ]);
+    echo json_encode(["status" => "error", "message" => "Username and password are required."]);
     exit;
 }
 
-$sql = "SELECT id, username, email, first_name, last_name, birthday, created_at
-        FROM users
-        WHERE username = ? AND password = ?";
+try {
+    // Note: Column is 'password', matching your schema exactly
+    $stmt = $conn->prepare("SELECT id, username, password FROM users WHERE username = :username LIMIT 1");
+    $stmt->execute([':username' => $username]);
+    $user = $stmt->fetch();
 
-$stmt = $conn->prepare($sql);
-$stmt->bind_param("ss", $username, $password);
-$stmt->execute();
+    if ($user && password_verify($password, $user['password'])) {
+        $token = bin2hex(random_bytes(32));
 
-$result = $stmt->get_result();
+        $updateStmt = $conn->prepare("UPDATE users SET auth_token = :token WHERE id = :id");
+        $updateStmt->execute([
+            ':token' => $token,
+            ':id' => $user['id']
+        ]);
 
-if ($result->num_rows > 0) {
-    $user = $result->fetch_assoc();
-
-    echo json_encode([
-        "status" => "success",
-        "message" => "Login successful.",
-        "user" => $user
-    ]);
-} else {
-    echo json_encode([
-        "status" => "error",
-        "message" => "Invalid username or password."
-    ]);
+        // Payload perfectly matches what Flutter's _saveLogin expects
+        echo json_encode([
+            "status" => "success",
+            "message" => "Login successful.",
+            "user" => [
+                "id" => (int)$user['id'],
+                "username" => $user['username'],
+                "auth_token" => $token
+            ]
+        ]);
+    } else {
+        echo json_encode(["status" => "error", "message" => "Invalid username or password."]);
+    }
+} catch (PDOException $e) {
+    http_response_code(500);
+    echo json_encode(["status" => "error", "message" => "Database error."]);
 }
-
-$stmt->close();
-$conn->close();
+?>
