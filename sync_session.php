@@ -27,19 +27,18 @@ if (empty($data["auth_token"]) || empty($data["user_id"])) {
 
 $authToken = $data["auth_token"];
 $userId = $data["user_id"];
-
-try {
+    try {
     $conn->beginTransaction();
 
-    // 3. OPTIONAL: Verify Token (Uncomment if your users table has auth_token)
-    /*
+    // STRICT TOKEN VERIFICATION
     $stmtUser = $conn->prepare("SELECT id FROM users WHERE id = ? AND auth_token = ?");
     $stmtUser->execute([$userId, $authToken]);
     if ($stmtUser->rowCount() === 0) {
-        echo json_encode(["status" => "error", "message" => "Invalid auth token."]);
+        $conn->rollBack();
+        http_response_code(401);
+        echo json_encode(["status" => "error", "message" => "Unauthorized. Token invalid or expired."]);
         exit();
     }
-    */
 
     // 4. INSERT PARENT SESSION (ON DUPLICATE KEY UPDATE handles retries gracefully)
     $stmtSession = $conn->prepare("
