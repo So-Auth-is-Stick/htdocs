@@ -61,18 +61,23 @@ $userId = $data["user_id"];
     // 5. INSERT EXERCISES AND REPS
     if (!empty($data['exercises'])) {
         // Prepare statements once for massive performance gain on loops
-        $stmtEx = $conn->prepare("INSERT IGNORE INTO exercise_telemetry (id, session_id, exercise_name, good_reps, bad_reps, exercise_score) VALUES (?, ?, ?, ?, ?, ?)");
+        $stmtEx = $conn->prepare("
+            INSERT IGNORE INTO exercise_telemetry
+            (id, session_id, exercise_name, good_reps, bad_reps, exercise_score, rep_scores_array)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ");
         $stmtRep = $conn->prepare("INSERT IGNORE INTO rep_telemetry (id, exercise_telemetry_id, rep_number, score) VALUES (?, ?, ?, ?)");
 
         foreach ($data['exercises'] as $ex) {
             // Insert Exercise
             $stmtEx->execute([
-                $ex['id'], 
-                $data['session_id'], 
-                $ex['exercise_name'], 
-                $ex['good_reps'] ?? 0, 
-                $ex['bad_reps'] ?? 0, 
-                $ex['exercise_score'] ?? 0
+                $ex['id'],
+                $data['session_id'],
+                $ex['exercise_name'],
+                $ex['good_reps'] ?? 0,
+                $ex['bad_reps'] ?? 0,
+                $ex['exercise_score'] ?? 0,
+                json_encode($ex['reps'] ?? [])
             ]);
 
             // Insert Individual Reps

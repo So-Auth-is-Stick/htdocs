@@ -1,73 +1,105 @@
 <?php
 error_reporting(E_ALL);
 ini_set('display_errors', 0);
+ini_set('log_errors', 1);
 
 header("Access-Control-Allow-Origin: *");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: POST");
+header("Access-Control-Max-Age: 3600");
+header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
 
 require_once "db.php";
 
 $rawData = file_get_contents("php://input");
 $data = json_decode($rawData, true);
 
+if (json_last_error() !== JSON_ERROR_NONE) {
+    echo json_encode([
+        "status" => "error",
+        "message" => "Invalid JSON: " . json_last_error_msg()
+    ]);
+    exit();
+}
+
+// fetch_history only needs user_id + auth_token
 if (empty($data["auth_token"]) || empty($data["user_id"])) {
-    echo json_encode(["status" => "error", "message" => "Unauthorized. Missing credentials."]);
-    exit;
+    echo json_encode([
+        "status" => "error",
+        "message" => "Invalid or empty payload."
+    ]);
+    exit();
 }
 
-$userId = $data["user_id"];
 $authToken = $data["auth_token"];
+$userId = (int)$data["user_id"];
 
-// 1. VERIFY TOKEN
-$verifySql = "SELECT id FROM users WHERE id = ? AND auth_token = ?";
-$verifyStmt = $conn->prepare($verifySql);
-$verifyStmt->bind_param("is", $userId, $authToken);
-$verifyStmt->execute();
-if ($verifyStmt->get_result()->num_rows === 0) {
-    echo json_encode(["status" => "error", "message" => "Unauthorized. Invalid token."]);
-    exit;
-}
-$verifyStmt->close();
+try {
+    // 1. verify user
+    $stmtUser = $conn->prepare("SELECT id FROM users WHERE id = ? AND auth_token = ? LIMIT 1");
+    $stmtUser->execute([$userId, $authToken]);
+    $verifiedUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
 
-// 2. FETCH SESSIONS
-$sessionsSql = "SELECT * FROM workout_sessions WHERE user_id = ? ORDER BY created_at ASC";
-$sessionsStmt = $conn->prepare($sessionsSql);
-$sessionsStmt->bind_param("i", $userId);
-$sessionsStmt->execute();
-$sessionsResult = $sessionsStmt->get_result();
-
-$payload = [];
-
-while ($session = $sessionsResult->fetch_assoc()) {
-    $sessionId = $session['id'];
-    
-    // 3. FETCH CHILD TELEMETRY
-    $exSql = "SELECT * FROM exercise_telemetry WHERE session_id = ?";
-    $exStmt = $conn->prepare($exSql);
-    $exStmt->bind_param("s", $sessionId);
-    $exStmt->execute();
-    $exResult = $exStmt->get_result();
-    
-    $exercises = [];
-    while ($ex = $exResult->fetch_assoc()) {
-        // Decode the stringified array back into actual JSON so Flutter can read it
-        $ex['rep_scores'] = json_decode($ex['rep_scores_array']);
-        unset($ex['rep_scores_array']); // Remove the raw string version
-        $exercises[] = $ex;
+    if (!$verifiedUser) {
+        http_response_code(401);
+        echo json_encode([
+            "status" => "error",
+            "message" => "Unauthorized. Token invalid or expired."
+        ]);
+        exit();
     }
-    $exStmt->close();
 
-    $session['exercises'] = $exercises;
-    $payload[] = $session;
+    // 2. fetch sessions
+    $stmtSessions = $conn->prepare("
+        SELECT id, user_id, routine_id, status, global_score, duration_seconds, created_at
+        FROM workout_sessions
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    ");
+    $stmtSessions->execute([$userId]);
+    $sessions = $stmtSessions->fetchAll(PDO::FETCH_ASSOC);
+
+    // 3. fetch exercises + reps for each session
+    $stmtExercises = $conn->prepare("
+        SELECT id, session_id, exercise_name, good_reps, bad_reps, exercise_score, rep_scores_array
+        FROM exercise_telemetry
+        WHERE session_id = ?
+    ");
+
+    $stmtReps = $conn->prepare("
+        SELECT id, exercise_telemetry_id, rep_number, score
+        FROM rep_telemetry
+        WHERE exercise_telemetry_id = ?
+        ORDER BY rep_number ASC
+    ");
+
+    foreach ($sessions as &$session) {
+        $stmtExercises->execute([$session['id']]);
+        $exercises = $stmtExercises->fetchAll(PDO::FETCH_ASSOC);
+
+        foreach ($exercises as &$exercise) {
+            $stmtReps->execute([$exercise['id']]);
+            $exercise['reps_detail'] = $stmtReps->fetchAll(PDO::FETCH_ASSOC);
+        }
+
+        $session['exercises'] = $exercises;
+    }
+
+    echo json_encode([
+        "status" => "success",
+        "sessions" => $sessions
+    ]);
+    exit();
+
+} catch (Exception $e) {
+    error_log("FETCH HISTORY ERROR: " . $e->getMessage());
+
+    http_response_code(500);
+    echo json_encode([
+        "status" => "error",
+        "message" => "Failed to fetch history.",
+        "debug" => $e->getMessage()
+    ]);
+    exit();
 }
-$sessionsStmt->close();
-
-echo json_encode([
-    "status" => "success", 
-    "message" => "History retrieved.",
-    "sessions" => $payload
-]);
-
-$conn->close();
 ?>
