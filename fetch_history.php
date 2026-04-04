@@ -22,7 +22,6 @@ if (json_last_error() !== JSON_ERROR_NONE) {
     exit();
 }
 
-// fetch_history only needs user_id + auth_token
 if (empty($data["auth_token"]) || empty($data["user_id"])) {
     echo json_encode([
         "status" => "error",
@@ -35,8 +34,12 @@ $authToken = $data["auth_token"];
 $userId = (int)$data["user_id"];
 
 try {
-    // 1. verify user
-    $stmtUser = $conn->prepare("SELECT id FROM users WHERE id = ? AND auth_token = ? LIMIT 1");
+    $stmtUser = $conn->prepare("
+        SELECT id 
+        FROM users 
+        WHERE id = ? AND auth_token = ? 
+        LIMIT 1
+    ");
     $stmtUser->execute([$userId, $authToken]);
     $verifiedUser = $stmtUser->fetch(PDO::FETCH_ASSOC);
 
@@ -49,7 +52,7 @@ try {
         exit();
     }
 
-    // 2. fetch sessions
+    // workout sessions
     $stmtSessions = $conn->prepare("
         SELECT id, user_id, routine_id, status, global_score, duration_seconds, created_at
         FROM workout_sessions
@@ -59,13 +62,14 @@ try {
     $stmtSessions->execute([$userId]);
     $sessions = $stmtSessions->fetchAll(PDO::FETCH_ASSOC);
 
-    // 3. fetch exercises + reps for each session
+    // exercise telemetry
     $stmtExercises = $conn->prepare("
         SELECT id, session_id, exercise_name, good_reps, bad_reps, exercise_score, rep_scores_array
         FROM exercise_telemetry
         WHERE session_id = ?
     ");
 
+    // rep telemetry
     $stmtReps = $conn->prepare("
         SELECT id, exercise_telemetry_id, rep_number, score
         FROM rep_telemetry
@@ -79,15 +83,31 @@ try {
 
         foreach ($exercises as &$exercise) {
             $stmtReps->execute([$exercise['id']]);
-            $exercise['reps_detail'] = $stmtReps->fetchAll(PDO::FETCH_ASSOC);
+            $reps = $stmtReps->fetchAll(PDO::FETCH_ASSOC);
+
+            $exercise['reps_detail'] = $reps;
+            $exercise['reps'] = array_map(function($r) {
+                return (float)$r['score'];
+            }, $reps);
         }
 
         $session['exercises'] = $exercises;
     }
 
+    // processed_videos
+    $stmtProcessed = $conn->prepare("
+        SELECT id, user_id, session_id, exercise_name, result_json, model_status, error_message, created_at, sync_status
+        FROM processed_videos
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+    ");
+    $stmtProcessed->execute([$userId]);
+    $processedVideos = $stmtProcessed->fetchAll(PDO::FETCH_ASSOC);
+
     echo json_encode([
         "status" => "success",
-        "sessions" => $sessions
+        "sessions" => $sessions,
+        "processed_videos" => $processedVideos
     ]);
     exit();
 
