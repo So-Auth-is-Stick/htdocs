@@ -1,5 +1,7 @@
 <?php
-?><!DOCTYPE html>
+  $apkPath = "downloads/bettergym.apk";
+?>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -31,7 +33,7 @@
         <a href="#about">About</a>
       </nav>
 
-      <a href="#cta" class="btn btn-outline">Get Started</a>
+      <a href="<?php echo $apkPath; ?>" class="btn btn-outline" download>Download App</a>
 
       <button class="menu-toggle" id="menuToggle" aria-label="Toggle menu">
         <span></span>
@@ -44,7 +46,7 @@
       <a href="#features">Features</a>
       <a href="#how-it-works">How it Works</a>
       <a href="#about">About</a>
-      <a href="#cta">Get Started</a>
+      <a href="<?php echo $apkPath; ?>" download>Download App</a>
     </div>
   </header>
 
@@ -64,7 +66,7 @@
           </p>
 
           <div class="hero-actions">
-            <a href="#cta" class="btn btn-primary">Try BetterGYM</a>
+            <a href="<?php echo $apkPath; ?>" class="btn btn-primary" download>Download APK</a>
             <a href="#how-it-works" class="btn btn-ghost">See How It Works</a>
           </div>
 
@@ -83,8 +85,6 @@
             </div>
           </div>
         </div>
-
-
       </div>
     </section>
 
@@ -243,7 +243,7 @@
           BetterGYM helps users train with more awareness by combining visual tracking,
           form correction, repetition counting, and predictive movement analysis.
         </p>
-        <a href="#home" class="btn btn-primary">Back to Top</a>
+        <a href="<?php echo $apkPath; ?>" class="btn btn-primary" download>Download APK</a>
       </div>
     </section>
   </main>
@@ -251,7 +251,7 @@
   <footer class="site-footer">
     <div class="container footer-content">
       <p>© <?php echo date('Y'); ?> BetterGYM. All rights reserved.</p>
-      <p>AI-powered workout support for better movement and safer training.</p>
+      <p>by Strawcas, Takkimi, Stephen. Pakyu Abel T. Soliman</p>
     </div>
   </footer>
 
